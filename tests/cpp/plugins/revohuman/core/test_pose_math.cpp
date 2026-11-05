@@ -16,18 +16,6 @@ using Catch::Approx;
 namespace
 {
 
-double det(const Mat3& m)
-{
-    return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
-           m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-}
-
-Vec3 mat_mul(const Mat3& m, const Vec3& v)
-{
-    return { m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-             m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2] };
-}
-
 void require_vec(const Vec3& a, const Vec3& b, double eps = 1e-12)
 {
     for (int i = 0; i < 3; ++i)
@@ -53,15 +41,6 @@ Pose sample_pose()
 
 } // namespace
 
-TEST_CASE("quat_to_mat is a proper rotation that agrees with quat_rotate", "[revohuman][pose]")
-{
-    const Pose p = sample_pose();
-    const Mat3 m = quat_to_mat(p.q);
-    REQUIRE(det(m) == Approx(1.0));
-    const Vec3 v{ 0.4, 0.1, -0.9 };
-    require_vec(mat_mul(m, v), quat_rotate(p.q, v));
-}
-
 TEST_CASE("compose and inverse are consistent", "[revohuman][pose]")
 {
     const Pose a = sample_pose();
@@ -75,17 +54,6 @@ TEST_CASE("compose and inverse are consistent", "[revohuman][pose]")
 
     const Vec3 v{ 0.01, -0.2, 0.3 };
     require_vec(transform_point(compose(a, b), v), transform_point(a, transform_point(b, v)));
-}
-
-TEST_CASE("slerp hits its endpoints and takes the short arc", "[revohuman][pose]")
-{
-    const Quat a = revohuman_test::axis_angle({ 0, 0, 1 }, 0.2);
-    const Quat b = revohuman_test::axis_angle({ 0, 0, 1 }, 1.0);
-    require_same_rotation(quat_slerp(a, b, 0.0), a);
-    require_same_rotation(quat_slerp(a, b, 1.0), b);
-    require_same_rotation(quat_slerp(a, b, 0.5), revohuman_test::axis_angle({ 0, 0, 1 }, 0.6));
-    const Quat neg_b{ -b[0], -b[1], -b[2], -b[3] };
-    require_same_rotation(quat_slerp(a, neg_b, 0.5), revohuman_test::axis_angle({ 0, 0, 1 }, 0.6));
 }
 
 TEST_CASE("joints in the stage chain the wrist pose and the kinematics", "[revohuman][pose]")

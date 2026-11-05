@@ -44,35 +44,6 @@ Vec3 quat_rotate(const Quat& q, const Vec3& v)
              v[2] + q[3] * t[2] + (u[0] * t[1] - u[1] * t[0]) };
 }
 
-Mat3 quat_to_mat(const Quat& q)
-{
-    const double x = q[0], y = q[1], z = q[2], w = q[3];
-    return { { { 1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w) },
-               { 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w) },
-               { 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y) } } };
-}
-
-Quat quat_slerp(const Quat& a, const Quat& b_in, double alpha)
-{
-    Quat b = b_in;
-    double c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    if (c < 0.0)
-    {
-        b = { -b[0], -b[1], -b[2], -b[3] };
-        c = -c;
-    }
-    double wa = 1.0 - alpha;
-    double wb = alpha;
-    if (c < 0.9995)
-    {
-        const double theta = std::acos(c);
-        const double s = std::sin(theta);
-        wa = std::sin((1.0 - alpha) * theta) / s;
-        wb = std::sin(alpha * theta) / s;
-    }
-    return quat_normalize({ wa * a[0] + wb * b[0], wa * a[1] + wb * b[1], wa * a[2] + wb * b[2], wa * a[3] + wb * b[3] });
-}
-
 double dot(const Vec3& a, const Vec3& b)
 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -106,17 +77,6 @@ Vec3 transform_point(const Pose& a, const Vec3& v)
 {
     const Vec3 r = quat_rotate(a.q, v);
     return { a.p[0] + r[0], a.p[1] + r[1], a.p[2] + r[2] };
-}
-
-Pose interpolate(const Pose& a, const Pose& b, double alpha)
-{
-    Pose out;
-    for (int i = 0; i < 3; ++i)
-    {
-        out.p[i] = a.p[i] + alpha * (b.p[i] - a.p[i]);
-    }
-    out.q = quat_slerp(a.q, b.q, alpha);
-    return out;
 }
 
 Pose parse_pose(std::string_view text, std::string_view flag)
