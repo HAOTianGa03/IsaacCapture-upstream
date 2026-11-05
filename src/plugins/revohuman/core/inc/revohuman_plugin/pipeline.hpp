@@ -4,7 +4,6 @@
 #pragma once
 
 #include "device_clock.hpp"
-#include "event_log.hpp"
 #include "tactile.hpp"
 #include "types.hpp"
 #include "wrist_tracking.hpp"
@@ -76,8 +75,6 @@ struct PipelineConfig
     std::int64_t health_timeout_ns = 500'000'000;
     //! Maximum age of a tactile force sample; also used for tactile health.
     std::int64_t tactile_max_age_ns = 100'000'000;
-    //! Period of the tactile_rate event in the event log; 0 turns it off.
-    std::int64_t tactile_rate_period_ns = 1'000'000'000;
 };
 
 //! Why a tactile sample was not pushed. Without a matching shape no force direction exists, so
@@ -117,10 +114,6 @@ struct PipelineStats
     //! The tactile_repeats marked invalid: the firmware re-sends the last snapshot that way when one
     //! read of the tactile board fails.
     std::uint64_t tactile_invalid_repeats = 0;
-    //! StaleSample skips, by side: sampled after the time it was received, or older than
-    //! tactile_max_age_ns.
-    std::uint64_t tactile_stale_future = 0;
-    std::uint64_t tactile_stale_old = 0;
     std::uint64_t shapes_pushed = 0;
     std::uint64_t generation_changes = 0;
 };
@@ -145,7 +138,7 @@ struct HandHealth
 class HandPipeline
 {
 public:
-    HandPipeline(Hand hand, PipelineConfig config, PushSink& sink, EventLog* log = nullptr);
+    HandPipeline(Hand hand, PipelineConfig config, PushSink& sink);
 
     //! Identity and joint names; glove samples before it are dropped. A glove without tactile sensors
     //! (HandMeta::has_tactile) gets neither tactile nor TactileMetadata; its joints and hand go out as usual.
@@ -184,15 +177,13 @@ private:
     void clear_shape();
     void push_shape_if_due(std::int64_t now_ns);
     void accept_tactile(const GloveSample& glove, std::int64_t now_ns);
-    void write_tactile_rate(std::int64_t now_ns);
     void inject(const GloveSample& sample, std::int64_t t_ns, std::int64_t now_ns);
-    void apply(const InjectorLifecycle::Step& step, std::int64_t t_ns);
+    void apply(const InjectorLifecycle::Step& step);
     void note_tactile_skip(TactileSkip skip, std::int64_t now_ns);
 
     Hand hand_;
     PipelineConfig config_;
     PushSink& sink_;
-    EventLog* log_;
 
     std::optional<HandMeta> meta_;
     std::shared_ptr<const LoadedShape> shape_;
@@ -222,12 +213,6 @@ private:
     bool shape_published_ = false;
     std::optional<std::int64_t> last_tactile_warning_ns_;
     PipelineStats stats_;
-
-    //! Start of the current tactile_rate window, its counters, and
-    //! the largest push latency (now minus sampling time) in it; -1 without a push.
-    std::optional<std::int64_t> rate_window_ns_;
-    PipelineStats rate_base_;
-    std::int64_t rate_lag_max_ns_ = -1;
 };
 
 } // namespace revohuman

@@ -5,7 +5,6 @@ add_executable(revohuman_core_tests
     test_shapes.hpp
     test_device_clock.cpp
     test_device_status.cpp
-    test_event_log.cpp
     test_pipeline.cpp
     test_pose_math.cpp
     test_serialize.cpp

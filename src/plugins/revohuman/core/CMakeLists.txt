@@ -8,8 +8,6 @@ add_library(revohuman_core STATIC
     inc/revohuman_plugin/device_clock.hpp
     device_status.cpp
     inc/revohuman_plugin/device_status.hpp
-    event_log.cpp
-    inc/revohuman_plugin/event_log.hpp
     pipeline.cpp
     inc/revohuman_plugin/pipeline.hpp
     pose_math.cpp

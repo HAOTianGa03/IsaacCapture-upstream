@@ -28,7 +28,7 @@ namespace
 
 constexpr std::string_view kUsage =
     "Usage: revohuman_plugin\n"
-    "         [--collection-prefix=NAME] [--event-log=FILE]\n"
+    "         [--collection-prefix=NAME]\n"
     "         [--wrist-source=auto|hand_tracking|controller]\n"
     "         [--aim-to-wrist-left=px,py,pz,qx,qy,qz,qw] [--aim-to-wrist-right=px,py,pz,qx,qy,qz,qw]\n"
     "         [--stall-ms=N] [--plugin-root-id=ID]";
@@ -104,8 +104,6 @@ try
         }
         if (auto value = flag_value(arg, "--collection-prefix"))
             config.collection_prefix = *value;
-        else if (auto value = flag_value(arg, "--event-log"))
-            config.event_log_path = *value;
         else if (auto value = flag_value(arg, "--wrist-source"))
         {
             config.wrist_source = wrist_source_mode(*value, "--wrist-source");

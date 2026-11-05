@@ -215,7 +215,7 @@ plugin, so build the tests before running them. Each library has its own
 suite under `tests/cpp/plugins/revohuman/`:
 
 - `core/` (`revohuman_core_tests`): the sample pipeline, tactile serialization
-  and skinning, device status, event log and pose math.
+  and skinning, device status and pose math.
 - `live/` (`revohuman_live_tests`): the live source against a fake of the C SDK
   library, compiled against the SDK's header, without gloves.
 - `integration/` (`revohuman_integration_tests`): both hands through the SDK

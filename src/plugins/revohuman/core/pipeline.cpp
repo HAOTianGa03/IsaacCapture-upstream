@@ -9,7 +9,6 @@
 #include <log_bridge/logger.hpp>
 
 #include <algorithm>
-#include <limits>
 #include <string>
 #include <utility>
 
@@ -53,8 +52,8 @@ const char* tactile_skip_name(TactileSkip skip)
     return "unknown";
 }
 
-HandPipeline::HandPipeline(Hand hand, PipelineConfig config, PushSink& sink, EventLog* log)
-    : hand_(hand), config_(config), sink_(sink), log_(log), lifecycle_(config.stall_ns)
+HandPipeline::HandPipeline(Hand hand, PipelineConfig config, PushSink& sink)
+    : hand_(hand), config_(config), sink_(sink), lifecycle_(config.stall_ns)
 {
 }
 
@@ -76,13 +75,6 @@ void HandPipeline::set_meta(const HandMeta& meta)
             pipeline_logger()->info(
                 "{}: product {} has no tactile sensors; tactile is not pushed", hand_name(hand_), meta.product_code);
         }
-    }
-    if (log_)
-    {
-        log_->write("meta", { { "hand", std::string(hand_name(hand_)) },
-                              { "product_code", meta.product_code },
-                              { "device_id", meta.device_id },
-                              { "has_tactile", meta.has_tactile } });
     }
 }
 
@@ -115,12 +107,6 @@ void HandPipeline::on_glove(const GloveSample& sample, std::int64_t now_ns)
         last_tactile_sample_ns_.reset();
         last_tactile_push_ns_.reset();
         tactile_invalid_held_ = false;
-        if (log_)
-        {
-            log_->write("generation", { { "hand", std::string(hand_name(hand_)) },
-                                        { "from", static_cast<std::uint64_t>(*generation_) },
-                                        { "to", static_cast<std::uint64_t>(sample.generation) } });
-        }
     }
     generation_ = sample.generation;
     last_glove_ns_ = now_ns;
@@ -208,7 +194,6 @@ void HandPipeline::accept_tactile(const GloveSample& glove, std::int64_t now_ns)
     else if (t_ns > now_ns || now_ns - t_ns > config_.tactile_max_age_ns)
     {
         skip = TactileSkip::StaleSample;
-        ++(t_ns > now_ns ? stats_.tactile_stale_future : stats_.tactile_stale_old);
     }
     else if (repeat)
     {
@@ -234,7 +219,6 @@ void HandPipeline::accept_tactile(const GloveSample& glove, std::int64_t now_ns)
     sink_.push_tactile(serialize_tactile(taxel_forces(tactile.values)), t_ns, raw_ns);
     tactile_published_ = true;
     ++stats_.tactile_pushed;
-    rate_lag_max_ns_ = std::max(rate_lag_max_ns_, now_ns - t_ns);
     last_tactile_push_ns_ = now_ns;
     last_tactile_raw_ns_ = raw_ns;
     last_tactile_sample_ns_ = t_ns;
@@ -268,13 +252,6 @@ void HandPipeline::push_shape_if_due(std::int64_t now_ns)
     {
         return;
     }
-    if (!last_shape_push_ns_ && log_)
-    {
-        log_->write("shape", { { "hand", std::string(hand_name(hand_)) },
-                               { "sha256", shape_->sha256() },
-                               { "taxels", static_cast<std::uint64_t>(shape_->taxel_count()) },
-                               { "bytes", static_cast<std::uint64_t>(shape_->bytes().size()) } });
-    }
     sink_.push_shape(shape_->bytes(), now_ns);
     shape_published_ = true;
     ++stats_.shapes_pushed;
@@ -296,17 +273,12 @@ void HandPipeline::note_tactile_skip(TactileSkip skip, std::int64_t now_ns)
         pipeline_logger()->warn("{}: tactile not pushed ({})", hand_name(hand_), tactile_skip_name(skip));
         last_tactile_warning_ns_ = now_ns;
     }
-    if (log_)
-    {
-        log_->write(
-            "tactile", { { "hand", std::string(hand_name(hand_)) }, { "skip", std::string(tactile_skip_name(skip)) } });
-    }
     tactile_skip_ = skip;
 }
 
 void HandPipeline::on_tick(std::int64_t now_ns)
 {
-    apply(lifecycle_.on_tick(now_ns), now_ns);
+    apply(lifecycle_.on_tick(now_ns));
     if (tactile_published_ && (!last_tactile_sample_ns_ || now_ns < *last_tactile_sample_ns_ ||
                                now_ns - *last_tactile_sample_ns_ > config_.tactile_max_age_ns))
     {
@@ -316,50 +288,6 @@ void HandPipeline::on_tick(std::int64_t now_ns)
     }
 
     push_shape_if_due(now_ns);
-
-    if (log_ && config_.tactile_rate_period_ns > 0)
-    {
-        if (!rate_window_ns_)
-        {
-            rate_window_ns_ = now_ns;
-            rate_base_ = stats_;
-        }
-        else if (now_ns - *rate_window_ns_ >= config_.tactile_rate_period_ns)
-        {
-            write_tactile_rate(now_ns);
-        }
-    }
-}
-
-void HandPipeline::write_tactile_rate(std::int64_t now_ns)
-{
-    // Counts over the window since the last event, plus running totals so that a reader can join
-    // any two events and tell a restarted plugin (totals going down) from a missed line.
-    const PipelineStats& s = stats_;
-    const PipelineStats& b = rate_base_;
-    const std::uint64_t skipped = s.tactile_skipped - b.tactile_skipped;
-    const std::uint64_t stale_future = s.tactile_stale_future - b.tactile_stale_future;
-    const std::uint64_t stale_old = s.tactile_stale_old - b.tactile_stale_old;
-    log_->write("tactile_rate", { { "hand", std::string(hand_name(hand_)) },
-                                  { "t_ns", now_ns },
-                                  { "window_s", static_cast<double>(now_ns - *rate_window_ns_) * 1e-9 },
-                                  { "samples", s.tactile_samples - b.tactile_samples },
-                                  { "pushed", s.tactile_pushed - b.tactile_pushed },
-                                  { "repeats", s.tactile_repeats - b.tactile_repeats },
-                                  { "invalid_repeats", s.tactile_invalid_repeats - b.tactile_invalid_repeats },
-                                  { "skipped", skipped },
-                                  { "skip_stale_future", stale_future },
-                                  { "skip_stale_old", stale_old },
-                                  { "skip_other", skipped - stale_future - stale_old },
-                                  { "lag_max_ms", rate_lag_max_ns_ < 0 ? std::numeric_limits<double>::quiet_NaN() :
-                                                                         static_cast<double>(rate_lag_max_ns_) * 1e-6 },
-                                  { "samples_total", s.tactile_samples },
-                                  { "pushed_total", s.tactile_pushed },
-                                  { "skipped_total", s.tactile_skipped },
-                                  { "invalid_repeats_total", s.tactile_invalid_repeats } });
-    rate_window_ns_ = now_ns;
-    rate_base_ = stats_;
-    rate_lag_max_ns_ = -1;
 }
 
 void HandPipeline::inject(const GloveSample& sample, std::int64_t t_ns, std::int64_t now_ns)
@@ -368,7 +296,7 @@ void HandPipeline::inject(const GloveSample& sample, std::int64_t t_ns, std::int
     // the hand stays at the stage origin and is pushed untracked, so its joints still show.
     const WristPose wrist = wrist_ ? wrist_->wrist(hand_, t_ns) : WristPose{};
     const bool tracked = wrist.valid && wrist.tracked;
-    apply(lifecycle_.on_frame(now_ns), t_ns);
+    apply(lifecycle_.on_frame(now_ns));
     const HandKinematics& kinematics = *sample.kinematics;
     HandFrame frame;
     frame.joints = joints_in_stage(wrist.valid ? wrist.pose_stage : Pose{}, kinematics);
@@ -386,33 +314,19 @@ void HandPipeline::inject(const GloveSample& sample, std::int64_t t_ns, std::int
     }
 }
 
-void HandPipeline::apply(const InjectorLifecycle::Step& step, std::int64_t t_ns)
+void HandPipeline::apply(const InjectorLifecycle::Step& step)
 {
     if (step.destroy)
     {
         sink_.hand_destroy();
         ++stats_.injector_destroys;
         pipeline_logger()->info("{}: hand removed ({})", hand_name(hand_), step.reason);
-        if (log_)
-        {
-            log_->write("injector", { { "hand", std::string(hand_name(hand_)) },
-                                      { "action", std::string("destroy") },
-                                      { "reason", step.reason },
-                                      { "t_ns", t_ns } });
-        }
     }
     if (step.create)
     {
         sink_.hand_create();
         ++stats_.injector_creates;
         pipeline_logger()->info("{}: hand injected ({})", hand_name(hand_), step.reason);
-        if (log_)
-        {
-            log_->write("injector", { { "hand", std::string(hand_name(hand_)) },
-                                      { "action", std::string("create") },
-                                      { "reason", step.reason },
-                                      { "t_ns", t_ns } });
-        }
     }
 }
 
@@ -423,7 +337,7 @@ void HandPipeline::reset(const char* reason)
         InjectorLifecycle::Step step;
         step.destroy = true;
         step.reason = reason;
-        apply(step, 0);
+        apply(step);
     }
     clear_tactile();
     last_glove_ns_.reset();
@@ -437,10 +351,6 @@ void HandPipeline::reset(const char* reason)
     tactile_invalid_held_ = false;
     generation_.reset();
     wrist_tracked_ = false;
-    if (log_)
-    {
-        log_->write("reset", { { "hand", std::string(hand_name(hand_)) }, { "reason", std::string(reason) } });
-    }
 }
 
 HandHealth HandPipeline::health(std::int64_t now_ns) const

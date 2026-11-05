@@ -6,7 +6,6 @@
 #include <deviceio_session/deviceio_session.hpp>
 #include <plugin_utils/plugin_device_status_publisher.hpp>
 #include <plugin_utils/wrist_pose_source.hpp>
-#include <revohuman_plugin/event_log.hpp>
 #include <revohuman_plugin/live_source.hpp>
 #include <revohuman_plugin/pipeline.hpp>
 #include <revohuman_plugin/source.hpp>
@@ -36,8 +35,6 @@ struct RevoHumanPluginConfig
     LiveSourceConfig live;
     //! Collections are <prefix>_<side>_<stream>, e.g. revohuman_left_tactile.
     std::string collection_prefix = "revohuman";
-    //! JSON-lines audit log of the run; disabled when empty.
-    std::string event_log_path;
     PipelineConfig pipeline;
     //! Where the WRIST pose comes from: optical hand tracking, a controller, or both (Auto).
     plugin_utils::WristSourceMode wrist_source = plugin_utils::WristSourceMode::Auto;
@@ -97,7 +94,6 @@ private:
     std::unique_ptr<core::XrTimeConverter> time_converter_;
     std::unique_ptr<core::DeviceIOSession> deviceio_;
     std::unique_ptr<Wrists> wrists_;
-    EventLog event_log_;
     std::array<std::unique_ptr<HandOutput>, 2> outputs_;
     std::array<std::unique_ptr<HandPipeline>, 2> pipelines_;
     std::unique_ptr<Source> source_;

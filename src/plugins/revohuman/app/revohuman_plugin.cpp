@@ -267,15 +267,13 @@ RevoHumanPlugin::RevoHumanPlugin(RevoHumanPluginConfig config)
       wrist_config_(wrist_config(config_)),
       wrist_requirements_(plugin_utils::WristPoseSource::collect_requirements(wrist_config_.mode)),
       session_(make_session(config_, wrist_requirements_)),
-      time_converter_(std::make_unique<core::XrTimeConverter>(session_->get_handles())),
-      event_log_(config_.event_log_path)
+      time_converter_(std::make_unique<core::XrTimeConverter>(session_->get_handles()))
 {
     auto logger = plugin_logger();
     const auto handles = session_->get_handles();
     deviceio_ = core::DeviceIOSession::run(wrist_requirements_.trackers, handles);
     wrists_ = std::make_unique<Wrists>(
         wrist_config_, handles, deviceio_.get(), std::move(wrist_requirements_.controller_tracker), *time_converter_);
-    EventLog* log = event_log_.enabled() ? &event_log_ : nullptr;
     for (const Hand hand : kHands)
     {
         std::shared_ptr<const LoadedShape> shape;
@@ -294,7 +292,7 @@ RevoHumanPlugin::RevoHumanPlugin(RevoHumanPluginConfig config)
         output = std::make_unique<HandOutput>(
             handles, *time_converter_, hand, config_.collection_prefix, shape ? shape->bytes().size() : 0);
         auto& pipeline = pipelines_[index_of(hand)];
-        pipeline = std::make_unique<HandPipeline>(hand, config_.pipeline, *output, log);
+        pipeline = std::make_unique<HandPipeline>(hand, config_.pipeline, *output);
         pipeline->set_wrist_provider(wrists_.get());
         if (shape)
             pipeline->set_shape(std::move(shape));

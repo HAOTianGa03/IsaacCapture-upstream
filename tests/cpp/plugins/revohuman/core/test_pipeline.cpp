@@ -6,14 +6,10 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <flatbuffers/flatbuffers.h>
-#include <revohuman_plugin/event_log.hpp>
 #include <revohuman_plugin/pipeline.hpp>
 #include <revohuman_plugin/pose_math.hpp>
 #include <schema/tactile_array_generated.h>
 
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -235,61 +231,6 @@ WristPose wrist_at(std::array<double, 3> p, bool tracked = true)
 std::shared_ptr<const LoadedShape> shape(std::size_t taxels)
 {
     return std::make_shared<const LoadedShape>(build_shape_buffer(revohuman_test::rigid_shape(taxels)));
-}
-
-//! A fresh event log file, removed again when the test ends.
-struct TempLog
-{
-    explicit TempLog(const std::string& name)
-        : path(std::filesystem::temp_directory_path() / ("revohuman_" + name + ".jsonl"))
-    {
-        std::filesystem::remove(path);
-    }
-    ~TempLog()
-    {
-        std::filesystem::remove(path);
-    }
-
-    //! The lines of one event, in order.
-    std::vector<std::string> events(const std::string& event) const
-    {
-        std::ifstream in(path);
-        std::vector<std::string> out;
-        std::string line;
-        while (std::getline(in, line))
-        {
-            if (line.find("\"event\":\"" + event + "\"") != std::string::npos)
-            {
-                out.push_back(line);
-            }
-        }
-        return out;
-    }
-
-    std::filesystem::path path;
-};
-
-//! The raw JSON value of a field in an event line.
-std::string field(const std::string& line, const std::string& key)
-{
-    const std::string tag = "\"" + key + "\":";
-    const auto at = line.find(tag);
-    REQUIRE(at != std::string::npos);
-    const auto begin = at + tag.size();
-    return line.substr(begin, line.find_first_of(",}", begin) - begin);
-}
-
-double number(const std::string& line, const std::string& key)
-{
-    return std::strtod(field(line, key).c_str(), nullptr);
-}
-
-//! Every received tactile sample is accounted for exactly once in a tactile_rate window.
-void require_rate_identity(const std::string& line)
-{
-    REQUIRE(number(line, "samples") == number(line, "repeats") + number(line, "skipped") + number(line, "pushed"));
-    REQUIRE(number(line, "skipped") ==
-            number(line, "skip_stale_future") + number(line, "skip_stale_old") + number(line, "skip_other"));
 }
 
 } // namespace
@@ -970,123 +911,6 @@ TEST_CASE("an invalid re-send of the pushed tactile sample holds it until the ma
         p.on_glove(g, 107 * kMs);
         REQUIRE(p.health(107 * kMs).tactile_skip == TactileSkip::Invalid);
     }
-}
-
-TEST_CASE("tactile_rate counts immediate local force publication", "[revohuman][pipeline]")
-{
-    TempLog file("tactile_rate_steady");
-    {
-        EventLog log(file.path.string());
-        RecordingSink sink;
-        HandPipeline p(Hand::Left, {}, sink, &log);
-        p.set_meta(meta());
-        p.set_shape(shape(241));
-        // Encoder/tactile sampling skew must not delay taxel-local forces.
-        const std::int64_t offsets_ms[] = { 3, 6, 5, 4 };
-        for (std::uint32_t i = 0; i <= 600; ++i)
-        {
-            const std::int64_t glove_ns = 100 * kMs + 5 * kMs * i;
-            auto g = glove_at(glove_ns, 1000 + 5 * i);
-            g.tactile = tactile(241, glove_ns + offsets_ms[i % 4] * kMs);
-            g.tactile->device_tick = 500 + 5 * i;
-            const std::int64_t now_ns = glove_ns + 10 * kMs;
-            p.on_glove(g, now_ns);
-            p.on_tick(now_ns);
-        }
-        REQUIRE(p.stats().tactile_pushed == 601);
-        REQUIRE(p.stats().tactile_skipped == 0);
-    }
-    const auto rates = file.events("tactile_rate");
-    REQUIRE(rates.size() == 3);
-    for (std::size_t w = 0; w < rates.size(); ++w)
-    {
-        const auto& line = rates[w];
-        REQUIRE(field(line, "hand") == "\"left\"");
-        REQUIRE(number(line, "t_ns") == Approx(static_cast<double>(110 * kMs + 1000 * kMs * (w + 1))));
-        REQUIRE(number(line, "window_s") == Approx(1.0));
-        REQUIRE(number(line, "samples") == 200);
-        REQUIRE(number(line, "pushed") == 200);
-        REQUIRE(number(line, "skipped") == 0);
-        REQUIRE(number(line, "lag_max_ms") == Approx(7.0));
-        REQUIRE(number(line, "samples_total") == 1 + 200 * (w + 1));
-        REQUIRE(number(line, "pushed_total") == 1 + 200 * (w + 1));
-        require_rate_identity(line);
-    }
-}
-
-TEST_CASE("tactile_rate accounts for rejection and recovery without pose queues", "[revohuman][pipeline]")
-{
-    TempLog file("tactile_rate_skips");
-    {
-        EventLog log(file.path.string());
-        RecordingSink sink;
-        HandPipeline p(Hand::Left, {}, sink, &log);
-        p.set_meta(meta());
-        p.set_shape(shape(241));
-        p.on_tick(0);
-        auto send = [&](std::uint32_t tick, std::int64_t sample_ms, std::int64_t now_ms, bool valid = true)
-        {
-            auto g = glove_at(now_ms * kMs, tick, false);
-            g.tactile = tactile(241, sample_ms * kMs);
-            g.tactile->device_tick = tick;
-            g.tactile->valid = valid;
-            p.on_glove(g, now_ms * kMs);
-        };
-        send(500, 1002, 1001); // future
-        send(501, 800, 1006); // stale
-        send(502, 1009, 1011); // publish
-        send(502, 1009, 1016); // repeat
-        send(503, 1023, 1024); // publish without an encoder pose
-        send(503, 1023, 1026, false); // invalid re-send of the pushed sample, held
-        p.on_tick(1300 * kMs);
-        send(504, 1359, 1361, false); // invalid, never a valid zero
-        p.reset("loop");
-        send(500, 1403, 1404); // reused device tick after reset
-        p.on_tick(2400 * kMs);
-        REQUIRE(p.stats().tactile_samples == 8);
-        REQUIRE(p.stats().tactile_pushed == 3);
-        REQUIRE(p.stats().tactile_skipped == 3);
-        REQUIRE(p.stats().tactile_repeats == 2);
-        REQUIRE(p.stats().tactile_invalid_repeats == 1);
-    }
-    const auto rates = file.events("tactile_rate");
-    REQUIRE(rates.size() == 2);
-    REQUIRE(number(rates[0], "window_s") == Approx(1.3));
-    REQUIRE(number(rates[0], "samples") == 6);
-    REQUIRE(number(rates[0], "pushed") == 2);
-    REQUIRE(number(rates[0], "repeats") == 2);
-    REQUIRE(number(rates[0], "invalid_repeats") == 1);
-    REQUIRE(number(rates[0], "skip_stale_future") == 1);
-    REQUIRE(number(rates[0], "skip_stale_old") == 1);
-    require_rate_identity(rates[0]);
-    REQUIRE(number(rates[1], "window_s") == Approx(1.1));
-    REQUIRE(number(rates[1], "samples") == 2);
-    REQUIRE(number(rates[1], "pushed") == 1);
-    REQUIRE(number(rates[1], "skip_other") == 1);
-    REQUIRE(number(rates[1], "invalid_repeats") == 0);
-    REQUIRE(number(rates[1], "lag_max_ms") == Approx(1.0));
-    require_rate_identity(rates[1]);
-    REQUIRE(number(rates[1], "samples_total") == 8);
-    REQUIRE(number(rates[1], "skipped_total") == 3);
-    REQUIRE(number(rates[1], "invalid_repeats_total") == 1);
-}
-
-TEST_CASE("tactile_rate is off with a zero period", "[revohuman][pipeline]")
-{
-    TempLog file("tactile_rate_off");
-    {
-        EventLog log(file.path.string());
-        RecordingSink sink;
-        PipelineConfig config;
-        config.tactile_rate_period_ns = 0;
-        HandPipeline p(Hand::Left, config, sink, &log);
-        p.set_meta(meta());
-        for (std::int64_t t = 0; t <= 3000; t += 100)
-        {
-            p.on_tick(t * kMs);
-        }
-    }
-    REQUIRE(file.events("tactile_rate").empty());
 }
 
 TEST_CASE("skipped tactile samples keep the force output until it expires", "[revohuman][pipeline]")
